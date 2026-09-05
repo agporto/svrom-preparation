@@ -1,0 +1,27 @@
+# Python build products
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.venv/
+build/
+dist/
+*.whl
+
+# Local specimen inputs and generated results
+data/
+inputs/
+results/
+artifacts/
+*.ply
+*.obj
+*.stl
+*.npz
+*.npy
+*.fcsv
+*.mrk.json
+*.zip
+run_metadata.json
+report.json
+progress.json
+export_validation.json

@@ -1,0 +1,13 @@
+# Paths are relative to this manifest. Keep the sequence cranial to caudal.
+schema_version: 1
+name: example_sequence
+units: mm
+mesh_coordinate_system: LPS
+guide_profile: vertebra28
+bones:
+  - name: T2
+    mesh: ../inputs/T2.ply
+    landmarks: ../inputs/T2.mrk.json
+  - name: T3
+    mesh: ../inputs/T3.ply
+    landmarks: ../inputs/T3.mrk.json
