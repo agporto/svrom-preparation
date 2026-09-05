@@ -4,6 +4,72 @@ The preparation workflow is separate from the existing ROM numerical
 profiles. These checks characterize the implementation and its limitations;
 they do not establish species-specific habitual posture.
 
+## Complementary seating — 0.2.0
+
+The revised objective passes **20 preparation tests** against the unchanged
+SVROM 0.7.1 source. New checks include full-region rejection of a lateral edge
+contact despite the same minimum gap as a seated pair, objective and clearance
+invariance under a common rigid transformation, adaptive witnesses for crossing
+triangles missed by vertex-only collision sampling, and legacy objective access.
+
+A constructed nonplanar key and recess share a nonsymmetric two-bump surface.
+Starting from a perturbed rigid pose, the selected fit recovered orientation
+within **0.314 degrees** and translation within **0.0061 mm**. The regression
+tolerances are 1 degree and 0.01 mm. This controlled construction uses matching
+guide extents; it does not validate transfer accuracy or anatomical boundaries.
+The constructed separation is vertical while the objective assumes local normal
+offsets, so exact zero parameter error is not the expected model optimum.
+
+The 21 supplied Ouroborus meshes were refitted using the same saved landmark
+transfers and all three gap scenarios. The validation manifest explicitly uses
+40 SLSQP iterations per refinement; all other complementary settings retain
+their defaults. Independent pair searches ran in four isolated processes;
+their input hashes/settings were checked before normal chain assembly/export.
+The result is **5 accepted joints**, **6 coordinate mismatches**, **4 open-mesh
+adjacencies**, and **5 unresolved seating searches**. Accepted segments are
+T2–T4, T6–L1, and L8–L10. No missing or rejected adjacency was bridged.
+
+T4/T5, T5/T6, and L7/L8 were accepted by the earlier objective but fail the new
+distributed-support criteria. L1/L2 and L4/L5 remain unresolved. These outcomes
+depend on the provisional guide regions and explicit thresholds; they do not
+establish anatomical impossibility. In particular, a broad guide neighborhood
+may contain surface outside the actual articular patch.
+
+Matched before/after measurements use the same guide regions and a common
+distance threshold of 0.07 times mean centrum length (0.02 gap scenario plus
+twice the 0.025 distance-band width):
+
+| Pair | Previous / updated regional surface RMS (mm) | Previous / updated weakest supported fraction | Updated status |
+|---|---:|---:|---|
+| T2/T3 | 0.304643 / 0.301997 | 0.3154 / 0.3148 | Accepted |
+| T4/T5 | 0.758845 / 0.600897 | 0.0470 / 0.0708 | Requires review |
+| L9/L10 | 0.541734 / 0.446201 | 0.0618 / 0.2041 | Accepted |
+
+RMS combines the six area-weighted directional mean-square surface distances
+equally. Supported fractions are weighted proportions of fixed guide regions,
+not anatomical contact percentages. T4/T5 improves centrum support but retains
+weak facet support. L9/L10 changes by 6.686 degrees from the supplied pose,
+versus 18.796 degrees previously; a smaller rotation alone is not evidence of
+greater biological accuracy.
+
+The selected T3/T4, L8/L9, and L9/L10 optimizations reached their iteration
+limits. Their retained poses pass the separate seating and full-mesh collision
+checks, but optimizer convergence and a global optimum are not established.
+T2/T3 and T6/L1 retain rechecked initialization candidates. The outputs remain
+geometric reference poses and pre-annotations for anatomical review.
+
+The completed export audit verified **60 patch meshes** against their original
+face/vertex identities and checked both bone transforms for all **10** exported
+SVROM configurations. All 10 passed the exported neutral-pose settings using
+the meshrom backend. Maximum recovered relative-transform error was
+**1.0392e-13**; all 21 input mesh hashes also match the previous run. Matched
+figures use full original triangles and common orthographic cameras/scales.
+These checks validate data preservation and the declared geometric criteria,
+not anatomical neutral posture or complete articular-patch boundaries.
+
+The earlier 0.1 measurements below describe the previous objective and exports;
+they are retained as historical comparisons, not measurements of the new fit.
+
 ## Standalone extraction — 0.1.0
 
 - Built and installed separate `svrom-preparation` 0.1.0 and unmodified

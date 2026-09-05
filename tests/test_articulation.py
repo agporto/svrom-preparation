@@ -11,6 +11,7 @@ from svrom_preparation.data import (Bone, Landmarks, inverse_rigid, read_landmar
     rigid_matrix, transform_points, validate_rigid, write_landmarks)
 from svrom_preparation.fitting import Candidate, PairFit, assemble_chain, fit_pair
 from svrom_preparation.settings import ArticulationSettings
+from svrom_preparation.seating import SeatingEvaluator
 from svrom_preparation.surfaces import (Region, apposition_scores, collision_check,
     patch_ensemble, prepare_regions)
 from svrom_preparation.transfer import Atlas, warp_landmarks
@@ -264,3 +265,59 @@ def test_resume_rejects_changed_inputs_and_preserves_originals(tmp_path, monkeyp
     manifest.write_text(yaml.safe_dump({'schema_version': 1, 'bones': entries, 'guide_profile': PROFILE}))
     with pytest.raises(ValueError, match='changed'):
         run_manifest(manifest, tmp_path/'out', resume=True, progress=lambda _: None)
+
+
+def test_seating_rejects_edge_contact_with_the_same_minimum_gap(tmp_path):
+    a = make_bone(tmp_path, 'seat_a', subdivisions=3)
+    b = make_bone(tmp_path, 'seat_b', origin=[0, 0, 1.04], subdivisions=3)
+    settings = ArticulationSettings()
+    evaluator = SeatingEvaluator(a, b, PROFILE, settings)
+    centered = rigid_matrix(translation=b.origin-a.origin)
+    edge = centered.copy(); edge[0, 3] += 1.4
+    good_energy, good = evaluator.evaluate(centered, .04, full=True, metrics=True)
+    bad_energy, bad = evaluator.evaluate(edge, .04, full=True, metrics=True)
+    # Both assemblies are collision-free and parallel with a 0.04 mm plane gap.
+    assert collision_check(a, b, centered)['verified']
+    assert collision_check(a, b, edge)['verified']
+    assert good['passes']
+    assert not bad['passes']
+    assert bad_energy > good_energy + 1.
+    assert any('seating offset' in reason for reason in bad['review_reasons'])
+
+
+def test_seating_objective_and_clearance_are_rigid_invariant(tmp_path):
+    a = make_bone(tmp_path, 'inv_a', subdivisions=2)
+    b = make_bone(tmp_path, 'inv_b', origin=[0, 0, 1.08], subdivisions=2)
+    settings = ArticulationSettings()
+    q = SeatingEvaluator(a, b, PROFILE, settings)
+    matrix = rigid_matrix(translation=b.origin-a.origin)
+    expected = q.evaluate(matrix, .04, full=True)
+    constraints = q.constraints(matrix)
+    r = Rotation.from_euler('xyz', [27, -38, 51], degrees=True).as_matrix()
+    t = np.array([1000, -350, 500])
+    c = make_bone(tmp_path, 'inv_c', rotation=r, origin=t, subdivisions=2)
+    d = make_bone(tmp_path, 'inv_d', rotation=r, origin=r @ np.array([0, 0, 1.08])+t, subdivisions=2)
+    other = SeatingEvaluator(c, d, PROFILE, settings)
+    moved = rigid_matrix(translation=d.origin-c.origin)
+    assert other.evaluate(moved, .04, full=True) == pytest.approx(expected, abs=2e-10)
+    np.testing.assert_allclose(other.constraints(moved), constraints, atol=2e-10, rtol=0)
+
+
+def test_intersection_witnesses_close_a_sampling_blind_spot(tmp_path):
+    a = make_bone(tmp_path, 'witness_a', extents=(4, .2, .2))
+    b = make_bone(tmp_path, 'witness_b', extents=(.2, 4, .2))
+    q = SeatingEvaluator(a, b, PROFILE, ArticulationSettings())
+    assert collision_check(a, b, np.eye(4))['intersections']
+    before = {name: len(points) for name, points in q.collision_points.items()}
+    count = q.add_collision_witnesses(np.eye(4))
+    assert count > 0
+    assert all(len(points) == before[name]+count for name, points in q.collision_points.items())
+    assert q.constraints(np.eye(4)).min() < -.0005
+
+
+def test_apposition_objective_remains_available(tmp_path):
+    a = make_bone(tmp_path, 'legacy_a', subdivisions=2)
+    b = make_bone(tmp_path, 'legacy_b', origin=[0, 0, 1.04], subdivisions=2)
+    fit = fit_pair(a, b, PROFILE, ArticulationSettings(objective='apposition', gap_fractions=(.04,)))
+    assert fit.candidates
+    assert all(not candidate.seating for candidate in fit.candidates)

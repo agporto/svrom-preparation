@@ -9,6 +9,13 @@ It allows curvature to follow the articulating surfaces and retains the fitted
 relative rotations in the exported zero pose. Outputs remain geometric reference
 poses and anatomical pre-annotations for review.
 
+Version 0.2 fits complementary opposing surfaces with distance, normal, and
+landmark-guided seating terms. Sampled clearance constraints are refined at
+detected intersections, and every retained pose must pass the independent
+triangle/containment check and distributed-support criteria. A small contact
+near one rim is no longer enough to accept a joint. The earlier objective remains
+available with `articulation.objective: apposition` for controlled comparisons.
+
 ## Installation
 
 Install the SVROM analysis package first. This preparation package has a one-way
@@ -96,6 +103,7 @@ coordinates, settings, patch interpretation, and output schema. The
 | `data` | Input meshes, coordinate conventions, landmarks, rigid frames |
 | `transfer` | Native SSM registration and sparse landmark transfer |
 | `surfaces` | Guide regions, surface support, collision checks, patch ensembles |
+| `seating` | Complementary surface loss, distributed support, adaptive clearance constraints |
 | `fitting` | Adjacent-joint optimization and chain assembly |
 | `workflow` | Manifests, provenance, resumable execution, SVROM exports |
 | `validation` | Original-face identity and exported-pose checks |

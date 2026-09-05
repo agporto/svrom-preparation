@@ -1,6 +1,6 @@
 # Landmark-guided articulation and contact pre-annotation
 
-svrom-preparation 0.1 provides a preparation workflow for an **ordered sequence of
+svrom-preparation 0.2 provides a preparation workflow for an **ordered sequence of
 approximately articulated vertebral meshes**. It accepts the existing
 MorphoWeave vertebra SSM or already transferred landmarks, fits rigid reference
 articulations, and proposes specimen-specific contact patches. It does not need
@@ -131,39 +131,71 @@ than the full spine's median bounding-box diagonal. Geodesic graph distances
 approximate continuous surface geodesics; the guide regions are not claimed to
 be anatomical patch boundaries.
 
-For each trial relative pose, bidirectional closest-triangle queries score:
+The default `complementary_seating` objective queries the closest original
+triangles in the opposing guide region. For each source surface point `p` with
+outward normal `n`, receiver point `q`, receiver normal `m`, and assumed gap `g`,
+the area-weighted loss is:
 
-- distance within the current assumed joint-gap band;
-- opposing normals and surfaces facing across the gap;
-- membership in the corresponding anatomical guide regions.
+```text
+log(1 + ||q - p - g*n||² / width²) + normal_weight * ||m + n||²
+```
 
-The fitting score integrates these terms by surface area over **fixed guide
-regions**. Its normalization does not change when only a small part of a region
-fits. Both directions of every configured interface contribute separately, so
-a large centrum cannot overwhelm the facets. During fitting the continuous
-surface assignments are updated at each pose evaluation; hard patch masks are
-not used to define their own optimum.
+The long-tailed distance term provides a fitting gradient even when surfaces
+start apart. Opposite normals favor complementary surfaces rather than
+same-facing surface registration. A quadratic tangential offset term weakly
+centers the projected landmark groups. It uses the projected guide points,
+not seed-triangle centroids, which can have different triangulation offsets.
+The average opposing regional normals define the tangent plane. These terms
+are explicit geometric assumptions, not a cartilage or soft-tissue model.
 
-Rigid optimization uses the original pose, landmark alignment, and surface
-normal alignment as initializations. In particular, the normal-based seed can
+The score integrates over **fixed guide regions**. Its area normalization does
+not change when only a small part fits. Both directions and all configured
+interfaces contribute equally, so a large centrum cannot overwhelm the facets.
+Closest-surface assignments update at every trial pose; hard patch masks never
+define their own optimum. Final scoring uses every guide-region triangle
+centroid, while fitting uses deterministic area quadrature.
+
+Each retained pose must also pass three full-region checks on both sides of
+every interface: sufficient area-weighted support, sufficient support spread
+in the region's tangential directions, and a bounded guide-centering offset.
+Support requires proximity, opposing normals, and surfaces facing across the
+gap. Spread is the smallest eigenvalue of the supported footprint covariance
+normalized by the full region covariance. These diagnostics help reject a
+small or narrow rim contact. They are not anatomical contact probabilities.
+
+Rigid optimization uses the original pose, landmark alignment, surface
+normal alignment, and feasible legacy fits as initializations. In particular, the normal-based seed can
 recover intrinsic articulation angles even when the anatomical frames are
 parallel. There is no straight target centerline and no penalty pulling joint
 angles toward zero. All rotations must have determinant +1.
 
-The optimizer's collision penalty uses a sampled, unsmoothed SDF. Final candidate
-acceptance instead checks triangle intersections and containment of every mesh
-component. The articulation workflow uses double-precision VTK coordinates.
-Small bounded opening translations are probed when an optimized candidate still
-intersects. An optimizer evaluation limit is reported separately from geometric
-verification; verification is not a guarantee of global optimality.
+The complementary fitter uses bounded SLSQP with exact signed-triangle distance
+constraints on sampled whole-bone face centroids and vertices. Final candidate
+acceptance independently checks triangle intersections and containment of every
+mesh component. If that check finds a missed intersection, its contact points
+are attached to both bones as additional clearance constraints and the fitter
+refines again. Small bounded opening translations are a final fallback; every
+acceptance criterion is recomputed afterward. Sampling does not certify a
+global minimum clearance. The independent mesh check certifies only the stated
+nonintersection/containment conditions on closed, consistently wound inputs.
+
+An optimizer iteration limit is reported separately from geometric acceptance;
+acceptance does not guarantee convergence or global optimality. The old
+`apposition` objective retains Powell and its sampled SDF penalty, both for
+reproduction and to supply initializations. Its score does not rank the final
+complementary candidates. Use a fresh output directory when changing objectives.
 
 Candidate joint poses are assembled into chains by a bounded beam search that
 checks nonadjacent bones for collisions. This preserves the fitted relative
-rotations and their resulting curvature. Failed adjacencies split the sequence;
+rotations and their resulting curvature. A weak robust penalty on differences
+between consecutive anatomical joint rotations helps choose between similarly
+seated candidates. It does not prescribe zero angles or a centerline. Set
+`chain_consistency_weight: 0` to disable it. Failed adjacencies split the sequence;
 the code never substitutes a connection across a missing/rejected vertebra.
 
 Patch support is then evaluated over retained, independently checked
-articulations, including small local pose perturbations. Outputs distinguish
+articulations across gap scenarios and distinct fitted initializations. Legacy
+mode also probes small local pose perturbations. Outputs distinguish
 a consistently supported **core** and a broader **possible** region. Each
 interface retains its largest supported connected component. Frequencies are
 fractions of the explored candidate set, **not calibrated probabilities or
@@ -176,14 +208,24 @@ assumptions, not species-specific biological calibrations:
 
 | Setting | Default | Meaning |
 |---|---:|---|
+| `objective` | `complementary_seating` | Surface seating; `apposition` reproduces the earlier objective |
 | `gap_fractions` | 0.01, 0.02, 0.04 | Three gap scenarios relative to pair centrum length |
 | `gap_width_fraction` | 0.025 | Width of the soft distance band |
 | `rotation_bound_deg` | 25 | Bound on each anatomical rotation-vector component |
 | `translation_bound_fraction` | 0.30 | Bound on each translation component relative to length |
 | `sample_count` | 192 | Area-stratified fitting samples per guide-region direction |
-| `max_evaluations` | 260 | Powell evaluations per refined initialization |
+| `max_evaluations` | 260 | Powell evaluations per legacy initialization |
 | `refine_candidates` | 3 | Initializations refined per gap scenario |
-| `ensemble_angle_deg` | 2 | Small local rotations used for annotation support |
+| `seating_max_iterations` | 60 | SLSQP iterations per initialization/refinement |
+| `seating_distance_fraction` | 0.08 | Long-tailed distance-loss width relative to length |
+| `seating_normal_weight` / `seating_center_weight` | 0.5 / 20 | Normal and projected-guide centering weights |
+| `minimum_seating_coverage` | 0.20 | Minimum weighted supported fraction of each guide region |
+| `minimum_seating_spread` | 0.10 | Minimum normalized support covariance eigenvalue |
+| `maximum_seating_offset_fraction` | 0.15 | Maximum tangential guide-centering offset relative to length |
+| `clearance_fraction` | 0.001 | Sampled clearance constraint margin relative to length |
+| `collision_refinement_rounds` | 2 | Additional refinements using detected intersection points |
+| `chain_consistency_weight` / `chain_angle_scale_deg` | 0.02 / 10 | Weak neighboring-joint rotation consistency |
+| `ensemble_angle_deg` | 2 | Legacy local rotations used for annotation support |
 | `core_frequency` / `extension_frequency` | 0.80 / 0.15 | Candidate-set support thresholds |
 
 The gap scenarios are reported separately and their representatives are retained.

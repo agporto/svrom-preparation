@@ -43,6 +43,7 @@ class TransferSettings:
 
 @dataclass(frozen=True)
 class ArticulationSettings:
+    objective: str = 'complementary_seating'
     # Fractions of the pair's mean landmark-defined centrum length. These are
     # modeling scenarios, not inferred cartilage thicknesses.
     gap_fractions: tuple[float, ...] = (0.01, 0.02, 0.04)
@@ -64,25 +65,42 @@ class ArticulationSettings:
     extension_frequency: float = 0.15
     maximum_origin_step_fraction: float = 4.0
     chain_beam_width: int = 4
+    seating_distance_fraction: float = 0.08
+    seating_normal_weight: float = 0.5
+    seating_center_weight: float = 20.0
+    minimum_seating_coverage: float = 0.20
+    minimum_seating_spread: float = 0.10
+    maximum_seating_offset_fraction: float = 0.15
+    clearance_fraction: float = 0.001
+    seating_max_iterations: int = 60
+    collision_refinement_rounds: int = 2
+    chain_consistency_weight: float = 0.02
+    chain_angle_scale_deg: float = 10.0
 
     def __post_init__(self):
+        if self.objective not in {'apposition', 'complementary_seating'}:
+            raise ValueError('unknown articulation objective')
         object.__setattr__(self, 'gap_fractions', tuple(self.gap_fractions))
         if (not self.gap_fractions or not np.isfinite(self.gap_fractions).all()
                 or min(self.gap_fractions) <= 0 or len(set(self.gap_fractions)) != len(self.gap_fractions)):
             raise ValueError('gap_fractions must be distinct finite positive values')
         for name in ('sample_count', 'collision_samples', 'max_evaluations',
-                     'refine_candidates', 'retain_candidates', 'chain_beam_width'):
+                     'refine_candidates', 'retain_candidates', 'chain_beam_width',
+                     'seating_max_iterations', 'collision_refinement_rounds'):
             _positive_int(name, getattr(self, name))
         _positive_int('sdf_samples', self.sdf_samples, 16)
         for name in ('gap_width_fraction', 'rotation_bound_deg', 'translation_bound_fraction',
-                     'maximum_origin_step_fraction'):
+                     'maximum_origin_step_fraction', 'seating_distance_fraction',
+                     'maximum_seating_offset_fraction', 'clearance_fraction', 'chain_angle_scale_deg'):
             if not np.isfinite(getattr(self, name)) or getattr(self, name) <= 0:
                 raise ValueError(f'{name} must be finite and positive')
-        for name in ('ensemble_angle_deg', 'ensemble_energy_slack'):
+        for name in ('ensemble_angle_deg', 'ensemble_energy_slack', 'seating_normal_weight',
+                     'seating_center_weight', 'chain_consistency_weight'):
             if not np.isfinite(getattr(self, name)) or getattr(self, name) < 0:
                 raise ValueError(f'{name} must be finite and nonnegative')
         for name in ('normal_cosine', 'minimum_interface_support', 'patch_score_threshold',
-                     'core_frequency', 'extension_frequency'):
+                     'core_frequency', 'extension_frequency', 'minimum_seating_coverage',
+                     'minimum_seating_spread'):
             if not np.isfinite(getattr(self, name)) or not 0 < getattr(self, name) < 1:
                 raise ValueError(f'{name} must be in (0, 1)')
         if self.extension_frequency > self.core_frequency:

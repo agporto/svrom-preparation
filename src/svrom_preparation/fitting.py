@@ -1,7 +1,7 @@
 """Bounded rigid articulation with fixed anatomical search neighborhoods."""
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 import time
 import numpy as np
 from scipy.optimize import minimize
@@ -20,11 +20,13 @@ class Candidate:
     collision: dict
     source: str
     optimization: dict = field(default_factory=dict)
+    seating: dict = field(default_factory=dict)
 
     def as_dict(self):
         return {'moving_local_to_fixed_local': self.matrix, 'gap': self.gap,
                 'energy': self.energy, 'interface_supports': self.supports,
-                'collision': self.collision, 'source': self.source, 'optimization': self.optimization}
+                'collision': self.collision, 'source': self.source, 'optimization': self.optimization,
+                'seating': self.seating}
 
 
 @dataclass
@@ -111,6 +113,8 @@ def fit_pair(fixed, moving, profile, settings):
         return PairFit(fixed.name, moving.name, 'mesh_requires_review', [], info)
     if fixed.transfer_report.get('needs_review') or moving.transfer_report.get('needs_review'):
         return PairFit(fixed.name, moving.name, 'landmark_transfer_requires_review', [], info)
+    if settings.objective == 'complementary_seating':
+        return _fit_complementary(fixed, moving, profile, settings, info, started)
     prepare_collision(fixed, settings)
     prepare_collision(moving, settings)
     all_candidates, gap_reports = [], []
@@ -233,6 +237,148 @@ def fit_pair(fixed, moving, profile, settings):
     return PairFit(fixed.name, moving.name, 'verified_geometric_reference' if retained else 'no_verified_articulation', retained, info)
 
 
+def _fit_complementary(fixed, moving, profile, settings, info, started):
+    from .seating import SeatingEvaluator
+
+    # Retain the previous algorithm as a source of feasible initializations.
+    # Its scores never decide the final complementary-seating ranking.
+    baseline = fit_pair(fixed, moving, profile, replace(settings, objective='apposition'))
+    evaluator = SeatingEvaluator(fixed, moving, profile, settings)
+    scale = evaluator.scale
+    proposed, gap_reports, warm = [], [], None
+    gaps = list(settings.gap_fractions)
+    middle = len(gaps)//2
+    order = [gaps[middle]] + [g for i, g in enumerate(gaps) if i != middle]
+    input_matrix = rigid_matrix(translation=moving.origin-fixed.origin)
+
+    def candidate(matrix, gap, source, optimization=None):
+        energy, diagnostics = evaluator.evaluate(matrix, gap, full=True, metrics=True)
+        supports, _ = pair_supports(fixed, moving, profile['interfaces'], matrix,
+            gap, settings.gap_width_fraction*scale, settings, None)
+        if np.min(supports) < settings.minimum_interface_support:
+            diagnostics['passes'] = False
+            diagnostics['review_reasons'].append('insufficient gap/facing support')
+        return Candidate(matrix, gap, energy, supports, collision_check(fixed, moving, matrix),
+                         source, optimization or {}, diagnostics)
+
+    for fraction in order:
+        gap = fraction*scale
+        coordinates = PairObjective(fixed, moving, profile, settings, gap)
+        seeds = [c.matrix for c in baseline.candidates if np.isclose(c.gap, gap)]
+        if baseline.candidates:
+            seeds.append(baseline.candidates[0].matrix)
+        if warm is not None:
+            seeds.insert(0, warm)
+        seeds.append(input_matrix)
+        rotations = [fixed.frame[:3, :3] @ moving.frame[:3, :3].T]
+        nf, nm = [], []
+        for item in profile['interfaces']:
+            nf.append(-evaluator.regions[fixed.name, item['fixed'], False].normal)
+            nm.append(evaluator.regions[moving.name, item['moving'], False].normal)
+        nf, nm = np.asarray(nf), np.asarray(nm)
+        if min(np.linalg.matrix_rank(nf, tol=1e-5), np.linalg.matrix_rank(nm, tol=1e-5)) < 2:
+            nf, nm = nf[:1], nm[:1]
+        if np.linalg.norm(nf) > 1e-10 and np.linalg.norm(nm) > 1e-10:
+            rotations.append(Rotation.align_vectors(nf, nm)[0].as_matrix())
+        for rotation in rotations:
+            translation = coordinates.posterior + coordinates.axes[:, 0]*gap - rotation @ coordinates.pivot
+            seeds.append(rigid_matrix(rotation, translation))
+        unique = []
+        for matrix in seeds:
+            x = coordinates.parameters(matrix)
+            if (all(lo <= v <= hi for v, (lo, hi) in zip(x, coordinates.bounds))
+                    and not any(np.allclose(matrix, previous, atol=1e-10, rtol=0) for previous in unique)):
+                unique.append(matrix)
+        ranked = sorted(enumerate(unique), key=lambda item: (
+            evaluator.evaluate(item[1], gap) + 20*max(0., -float(evaluator.constraints(item[1]).min())), item[0]))
+        candidates = [candidate(m, gap, 'initialization') for m in unique]
+        selected = []
+        for _, matrix in ranked:
+            if all(Rotation.from_matrix(matrix[:3, :3] @ m[:3, :3].T).magnitude() > np.deg2rad(1.)
+                   or np.linalg.norm(matrix[:3, 3]-m[:3, 3]) > .01*scale for m in selected):
+                selected.append(matrix)
+            if len(selected) >= settings.refine_candidates:
+                break
+        optimization_reports = []
+        for seed in selected:
+            x = coordinates.parameters(seed)
+            evaluations, iterations, witnesses = 0, 0, 0
+            for refinement in range(settings.collision_refinement_rounds+1):
+                result = minimize(
+                    lambda p: evaluator.evaluate(coordinates.matrix(p), gap), x,
+                    method='SLSQP', bounds=coordinates.bounds,
+                    constraints={'type': 'ineq', 'fun': lambda p: evaluator.constraints(coordinates.matrix(p))},
+                    options={'maxiter': settings.seating_max_iterations, 'ftol': 2e-6, 'eps': 2e-6})
+                x = result.x
+                evaluations += int(result.nfev)
+                iterations += int(result.nit)
+                matrix = coordinates.matrix(x)
+                opt = {'method': 'SLSQP', 'success': bool(result.success), 'message': str(result.message),
+                       'evaluations': evaluations, 'iterations': iterations, 'refinement_rounds': refinement,
+                       'collision_witnesses': witnesses,
+                       'minimum_constraint': float(evaluator.constraints(matrix).min())}
+                value = candidate(matrix, gap, 'complementary_seating', opt)
+                candidates.append(value)
+                if value.collision['verified']:
+                    break
+                if refinement == settings.collision_refinement_rounds:
+                    break
+                added = evaluator.add_collision_witnesses(matrix)
+                witnesses += added
+                if not added:
+                    break
+            optimization_reports.append(opt)
+            # A final tiny opening is allowed only within the original bounds;
+            # all seating criteria are recomputed after this adjustment.
+            if not value.collision['verified']:
+                for opening in (.0005, .001, .002, .005, .01):
+                    adjusted = matrix.copy()
+                    adjusted[:3, 3] += coordinates.axes[:, 0]*(opening*scale)
+                    p = coordinates.parameters(adjusted)
+                    if not all(lo <= v <= hi for v, (lo, hi) in zip(p, coordinates.bounds)):
+                        continue
+                    check = collision_check(fixed, moving, adjusted)
+                    if check['verified']:
+                        opt = dict(opt, axial_clearance_adjustment_mm=opening*scale)
+                        candidates.append(candidate(adjusted, gap, 'seating_clearance_adjustment', opt))
+                        break
+        candidates.sort(key=lambda c: c.energy)
+        valid = [c for c in candidates if c.collision['verified'] and c.seating['passes']]
+        if valid:
+            warm = valid[0].matrix
+            for c in valid:
+                if c.energy <= valid[0].energy+settings.ensemble_energy_slack and _distinct(c, proposed, scale):
+                    proposed.append(c)
+        clear = [c for c in candidates if c.collision['verified']]
+        gap_reports.append({'gap_fraction': fraction, 'gap': gap,
+                            'verified_candidates': len(valid),
+                            'best_verified_energy': valid[0].energy if valid else None,
+                            'best_attempt': candidates[0].as_dict() if candidates else None,
+                            'best_collision_free_attempt': clear[0].as_dict() if clear else None,
+                            'optimizations': optimization_reports})
+    proposed.sort(key=lambda c: c.energy)
+    retained = []
+    for fraction in settings.gap_fractions:
+        group = [c for c in proposed if np.isclose(c.gap, fraction*scale)]
+        if group:
+            retained.append(group[0])
+    for c in proposed:
+        if len(retained) >= max(settings.retain_candidates, len(settings.gap_fractions)):
+            break
+        if all(c is not old for old in retained):
+            retained.append(c)
+    retained.sort(key=lambda c: c.energy)
+    info.update({'objective': settings.objective, 'gap_scenarios': gap_reports,
+                 'retained_candidates': len(retained), 'elapsed_seconds': time.perf_counter()-started,
+                 'baseline_status': baseline.status,
+                 'input_relative_angles_deg': relative_angles(fixed, moving, input_matrix)})
+    if retained:
+        info['fitted_relative_angles_deg'] = relative_angles(fixed, moving, retained[0].matrix)
+        info['relative_rotation_change_deg'] = float(np.rad2deg(Rotation.from_matrix(retained[0].matrix[:3, :3]).magnitude()))
+    return PairFit(fixed.name, moving.name,
+                   'verified_geometric_reference' if retained else 'no_verified_seating', retained, info)
+
+
 def assemble_chain(bones, pair_fits, settings):
     """Select compatible pair candidates with global nonadjacent collision checks.
 
@@ -254,7 +400,16 @@ def assemble_chain(bones, pair_fits, settings):
                     world = transforms[-1] @ c.matrix
                     if all(collision_check(bones[start+i], bones[j+1], inverse_rigid(t) @ world)['verified']
                            for i, t in enumerate(transforms[:-1])):
-                        extensions.append((energy+c.energy, transforms+[world], choices+[k]))
+                        consistency = 0.
+                        if (j > start and settings.objective == 'complementary_seating'
+                                and settings.chain_consistency_weight > 0):
+                            previous = pair_fits[j-1].candidates[choices[-1]]
+                            a = bones[j-1].frame[:3, :3].T @ previous.matrix[:3, :3] @ bones[j].frame[:3, :3]
+                            b = bones[j].frame[:3, :3].T @ c.matrix[:3, :3] @ bones[j+1].frame[:3, :3]
+                            angle = Rotation.from_matrix(b @ a.T).magnitude()
+                            consistency = settings.chain_consistency_weight*np.log1p(
+                                (angle/np.deg2rad(settings.chain_angle_scale_deg))**2)
+                        extensions.append((energy+c.energy+consistency, transforms+[world], choices+[k]))
             if not extensions:
                 exhausted = True
                 break
@@ -264,6 +419,7 @@ def assemble_chain(bones, pair_fits, settings):
         # A failed beam must not be presented as a complete collision-free chain.
         status = 'global_collision_conflict' if exhausted else ('isolated_bone' if stop == start else 'verified')
         segments.append({'start': start, 'stop': stop, 'status': status,
-                         'energy': energy, 'local_to_world': transforms, 'candidate_indices': choices})
+                         'energy': energy, 'local_to_world': transforms, 'candidate_indices': choices,
+                         'pair_energy': sum(pair_fits[start+i].candidates[k].energy for i, k in enumerate(choices))})
         start = stop+1
     return segments
