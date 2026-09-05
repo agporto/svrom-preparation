@@ -12,6 +12,8 @@ def main(argv=None):
     init.add_argument('--atlas', required=True)
     init.add_argument('--meshes', required=True)
     init.add_argument('--out', required=True)
+    init.add_argument('--analysis-template', help='SVROM schema-2 YAML whose analysis settings will be size-normalized')
+    init.add_argument('--reference-frame-landmarks', help='Reference JSON with fixed/moving cotyle and condyle landmarks, in template units')
     run = commands.add_parser('run', help='Transfer landmarks, fit adjacent pairs, and export reviewable SVROM inputs')
     run.add_argument('manifest')
     run.add_argument('--output', required=True)
@@ -19,7 +21,9 @@ def main(argv=None):
     run.add_argument('--transfer-only', action='store_true')
     args = parser.parse_args(argv)
     if args.command == 'init':
-        print(create_manifest(args.atlas, args.meshes, args.out))
+        print(create_manifest(args.atlas, args.meshes, args.out,
+                              analysis_template=args.analysis_template,
+                              reference_frame_landmarks=args.reference_frame_landmarks))
         print('Check vertebral order and coordinate/units declarations before running.')
         return 0
     report = run_manifest(args.manifest, args.output, resume=args.resume, transfer_only=args.transfer_only)

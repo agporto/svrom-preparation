@@ -1,6 +1,6 @@
 # Landmark-guided articulation and contact pre-annotation
 
-svrom-preparation 0.2 provides a preparation workflow for an **ordered sequence of
+svrom-preparation 0.3 provides a preparation workflow for an **ordered sequence of
 approximately articulated vertebral meshes**. It accepts the existing
 MorphoWeave vertebra SSM or already transferred landmarks, fits rigid reference
 articulations, and proposes specimen-specific contact patches. It does not need
@@ -264,11 +264,15 @@ fit to the posterior centrum supplies the reference origin when supported by
 the local geometry; otherwise the interface-anchor midpoint is used and recorded.
 This is a coordinate convention, not a verified biomechanical center of rotation.
 
-The emitted search grids contain the zero pose only. First inspect the
-pre-annotations, then set study-specific ROM grids and justified constraints:
+Without an `analysis` section, emitted search grids contain the zero pose only.
+An [analysis template](ANALYSIS_TEMPLATES.md) supplies size-normalized ROM grids
+and constraints, including the original two-snake-vertebra example. Template
+and reference-landmark content hashes participate in resume checks. First
+inspect the pre-annotations and audit the exported reference pose:
 
 ```bash
-svrom-pose results/ouroborus/joints/JOINT/joint_possible.yaml --mode robust
+svrom-pose results/ouroborus/joints/JOINT/joint_possible.yaml --mode robust \
+  --rx 0 --ry 0 --rz 0 --tx 0 --ty 0 --tz 0
 ```
 
 Core and possible exports support a boundary-sensitivity comparison. Keep the

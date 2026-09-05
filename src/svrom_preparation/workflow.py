@@ -14,6 +14,7 @@ import yaml
 
 from ._version import __version__
 from svrom._version import __version__ as svrom_version
+from .analysis import AnalysisTemplate, resolve_analysis_spec
 from .data import (Bone, inverse_rigid, read_landmarks, relative_angles, rigid_matrix,
                    safe_name, sha256, transform_points, write_json, write_landmarks)
 from .fitting import PairFit, assemble_chain, fit_pair
@@ -46,6 +47,8 @@ def load_manifest(path):
         data['atlas'] = (path.parent/p).resolve() if not p.is_absolute() else p.resolve()
     if not atlas and any(not b.get('landmarks') for b in bones):
         raise ValueError('provide an atlas or landmark files for every bone')
+    if data.get('analysis') is not None:
+        data['analysis'] = resolve_analysis_spec(data['analysis'], path.parent)
     profile = data.get('guide_profile', 'vertebra28')
     if isinstance(profile, str):
         if profile != 'vertebra28': raise ValueError('unknown guide profile')
@@ -109,7 +112,7 @@ def estimate_joint_origin(fixed, moving, matrix, profile):
     return fallback, info
 
 
-def export_joint(directory, fixed, moving, fit, selected, settings, profile):
+def export_joint(directory, fixed, moving, fit, selected, settings, profile, *, analysis_template=None):
     directory = Path(directory)
     directory.mkdir(parents=True, exist_ok=True)
     candidate = fit.candidates[selected]
@@ -149,8 +152,7 @@ def export_joint(directory, fixed, moving, fit, selected, settings, profile):
         'neutral_articulation': {'convention': 'align_frames', 'fixed_frame': 'fitted_fixed', 'moving_frame': 'fitted_moving'},
         'coordinate_frames': {s: {'name': f'fitted_{s}', 'input_to_joint_matrix': m.tolist()} for s, m in matrices.items()},
         'meshes': {s: {'bone': f'{s}_bone.obj', 'coordinate_state': 'raw_scan'} for s in ('fixed', 'moving')},
-        # A neutral-only grid is intentional; choosing study ROM grids and
-        # coverage thresholds is a separate scientific analysis decision.
+        # Inspection defaults apply only when no analysis template is supplied.
         'search': {'rotations': {a: [0.] for a in ('rx_deg', 'ry_deg', 'rz_deg')},
                    'translations': {a: [0.] for a in ('tx', 'ty', 'tz')}},
         'robust': {'penetration_tolerance': 0.005*scale, 'maximum_penetrating_area_fraction': 0.002,
@@ -164,6 +166,11 @@ def export_joint(directory, fixed, moving, fit, selected, settings, profile):
                               'profile': profile, 'joint_origin': origin_info,
                               'input_hashes': {s: sha256(b.path) if b.path else None for s, b in (('fixed', fixed), ('moving', moving))}},
     }
+    analysis_audit = None
+    if analysis_template is not None:
+        analysis_settings, analysis_audit = analysis_template.for_joint(fixed.length, moving.length)
+        config.update(analysis_settings)
+        config['source_provenance']['analysis_template'] = analysis_audit
     configurations = []
     for kind in ('core', 'possible'):
         if len(paths[kind]) == len(profile['interfaces']):
@@ -175,6 +182,7 @@ def export_joint(directory, fixed, moving, fit, selected, settings, profile):
               'selected_relative_angles_deg': relative_angles(fixed, moving, candidate.matrix),
               'joint_origin_fixed_local': origin, 'origin_diagnostics': origin_info,
               'input_to_joint': matrices, 'patches': patch_report, 'configurations': configurations,
+              'analysis_template': analysis_audit,
               'patch_interpretation': 'support frequency over sampled articulations, not calibrated anatomical probability',
               'candidates': [c.as_dict() for c in fit.candidates], 'fit': fit.report}
     if not configurations: report['annotation_status'] = 'incomplete_patch_support_requires_review'
@@ -186,12 +194,15 @@ def export_joint(directory, fixed, moving, fit, selected, settings, profile):
 def run_manifest(manifest_path, output_directory, *, resume=False, transfer_only=False, progress=print):
     started = time.perf_counter()
     data, profile, transfer_settings, settings = load_manifest(manifest_path)
+    analysis_template = AnalysisTemplate.load(data.get('analysis'))
     out = Path(output_directory).resolve()
     coordinates = data.get('mesh_coordinate_system', 'LPS')
     atlas = Atlas.load(data['atlas'], coordinates=coordinates,
                        ssm_coordinates=data.get('ssm_coordinate_system', 'RAS')) if data.get('atlas') else None
     fingerprints = [{k: sha256(b[k]) for k in ('mesh', 'landmarks') if b.get(k)} for b in data['bones']]
     identity = {'manifest': data, 'profile': profile, 'inputs': fingerprints, 'atlas': atlas.fingerprint if atlas else None}
+    if analysis_template is not None:
+        identity['analysis_template'] = analysis_template.provenance
     signature = hashlib.sha256(json.dumps(identity, sort_keys=True, default=str).encode()).hexdigest()
     meta_path = out/'run_metadata.json'
     if out.exists() and any(out.iterdir()):
@@ -207,7 +218,8 @@ def run_manifest(manifest_path, output_directory, *, resume=False, transfer_only
     write_json(meta_path, {'input_signature': signature, 'preparation_version': __version__,
                           'svrom_version': svrom_version, 'python': platform.python_version(),
                           'manifest': data, 'profile': profile, 'articulation_settings': settings.as_dict(),
-                          'transfer_settings': asdict(transfer_settings), 'inputs': fingerprints})
+                          'transfer_settings': asdict(transfer_settings), 'inputs': fingerprints,
+                          'analysis_template': analysis_template.provenance if analysis_template else None})
     bones, bone_reports = [], []
     for index, spec in enumerate(data['bones']):
         progress(f'[{index+1}/{len(data["bones"])}] Landmarks: {spec["name"]}')
@@ -265,7 +277,8 @@ def run_manifest(manifest_path, output_directory, *, resume=False, transfer_only
             entry = {'fixed': fit.fixed, 'moving': fit.moving, 'status': fit.status, 'fit': fit.report}
             if fit.candidates:
                 destination = out/'joints'/f'{fit.fixed}__{fit.moving}'
-                summary = export_joint(destination, bones[i], bones[i+1], fit, selections.get(i, 0), settings, profile)
+                summary = export_joint(destination, bones[i], bones[i+1], fit, selections.get(i, 0), settings, profile,
+                                       analysis_template=analysis_template)
                 entry.update({'directory': str(destination.relative_to(out)), 'configurations': summary['configurations'],
                               'annotation_status': summary['annotation_status'], 'selected_candidate': selections.get(i, 0)})
             report['pairs'].append(entry)
@@ -284,7 +297,7 @@ def run_manifest(manifest_path, output_directory, *, resume=False, transfer_only
     return report
 
 
-def create_manifest(atlas, meshes, destination):
+def create_manifest(atlas, meshes, destination, *, analysis_template=None, reference_frame_landmarks=None):
     paths = sorted(Path(meshes).glob('*.ply'), key=lambda p: [int(x) if x.isdigit() else x for x in re.split(r'(\d+)', p.name)])
     if not paths: raise ValueError('mesh directory contains no PLY files')
     destination = Path(destination).resolve()
@@ -293,6 +306,11 @@ def create_manifest(atlas, meshes, destination):
             'atlas': str(Path(atlas).resolve()), 'guide_profile': 'vertebra28',
             'bones': [{'name': p.stem, 'mesh': str(p.resolve())} for p in paths],
             'transfer': asdict(TransferSettings()), 'articulation': settings_to_yaml(ArticulationSettings())}
+    if analysis_template is not None or reference_frame_landmarks is not None:
+        spec = resolve_analysis_spec({'template': analysis_template,
+                                      'reference_frame_landmarks': reference_frame_landmarks}, Path.cwd())
+        AnalysisTemplate.load(spec)  # Fail before writing a manifest with invalid settings.
+        data['analysis'] = {key: str(value) for key, value in spec.items()}
     destination.parent.mkdir(parents=True, exist_ok=True)
     if destination.exists(): raise FileExistsError(destination)
     destination.write_text(yaml.safe_dump(data, sort_keys=False))

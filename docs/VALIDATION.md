@@ -4,6 +4,55 @@ The preparation workflow is separate from the existing ROM numerical
 profiles. These checks characterize the implementation and its limitations;
 they do not establish species-specific habitual posture.
 
+## Size-aware analysis templates — 0.3.0
+
+All **29 preparation tests pass** against unchanged SVROM 0.7.1. The new checks
+separate centimetre-to-millimetre conversion from physical object size, preserve
+asymmetric translation grids and dimensionless settings, scale optional and
+defaulted physical lengths, reject invalid lengths, and invalidate resume after
+either template or reference-landmark edits. Reference length is invariant to
+rigid motion. Synthetic exported joints at 0.1, 1, and 10 times scale give the
+same collision/contact decisions and normalized diagnostics (absolute tolerance
+2e-6) for reference, penetrating, separated, and rotated test poses. The 0.3.0
+wheel includes the analysis module and updated CLI options.
+
+The five accepted Ouroborus joint fits from 0.2.0 were re-exported with the
+original snake analysis template. Cached fit settings and mesh/landmark hashes
+were checked before reuse; fitting and landmark transfer were not repeated.
+Both role transforms, all patch-label arrays, and all **70 bone/patch OBJ
+files** are identical to the previous exports. All 21 source meshes retain
+their hashes, and all 60 patch meshes retain original face/vertex identities.
+The maximum decoded relative-transform error remains **1.0392e-13**.
+
+The reference mean centrum length is **3.1904271156 mm**. Measured target scales
+and resulting template thresholds are:
+
+| Joint | Mean centrum length (mm) | Physical size ratio | Maximum gap (mm) | Penetration tolerance (mm) |
+|---|---:|---:|---:|---:|
+| T2/T3 | 3.248216 | 1.018113 | 0.509057 | 0.040725 |
+| T3/T4 | 3.237121 | 1.014636 | 0.507318 | 0.040585 |
+| T6/L1 | 3.667649 | 1.149579 | 0.574790 | 0.045983 |
+| L8/L9 | 3.940540 | 1.235114 | 0.617557 | 0.049405 |
+| L9/L10 | 3.690020 | 1.156591 | 0.578296 | 0.046264 |
+
+All **10 core/possible configurations pass the actual zero-pose check** with
+the meshrom robust backend, retaining the template's 5% bidirectional coverage
+threshold, directional apposition, SDF-gradient normals, and SDF settings.
+The audit also verified exact rotation grids and normalized translations and
+length settings against the source configuration. A further **150 nonzero
+poses** (rotation endpoints and translation-lattice corners/nearest-zero point)
+produced finite diagnostics, with 26 feasible and 124 infeasible decisions.
+These are selected probes, not an estimate of feasible ROM volume or an
+exhaustive scan of the 6,565,125-pose grid per configuration. No threshold was
+relaxed to obtain a pass.
+
+Size normalization transfers geometric assumptions, not species calibration.
+The target landmark endpoint definitions remain provisional. The four snake
+patch identities and its historical labels are not copied into target data.
+Validation applies to robust mode; the fixed collision cutoff in SVROM's Maya
+compatibility profile prevents a claim of scale invariance for that profile.
+See [analysis templates](ANALYSIS_TEMPLATES.md) for the full scaling contract.
+
 ## Complementary seating — 0.2.0
 
 The revised objective passes **20 preparation tests** against the unchanged

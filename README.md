@@ -84,11 +84,26 @@ Audit the outputs, then run SVROM independently:
 ```bash
 svrom-prepare-check --results results/ouroborus
 svrom-prepare-check --results results/ouroborus --check-rom --backend python
-svrom-pose results/ouroborus/joints/JOINT/joint_possible.yaml --mode robust
+svrom-pose results/ouroborus/joints/JOINT/joint_possible.yaml --mode robust \
+  --rx 0 --ry 0 --rz 0 --tx 0 --ty 0 --tz 0
 ```
 
-The emitted ROM grids contain zero pose only. Inspect the poses, guides, patches,
-and assumed gaps before selecting study-specific ROM grids and thresholds.
+Without an analysis template, the emitted ROM grids contain zero pose only.
+To use the original SVROM two-snake-vertebra analysis, add these options to
+`svrom-prepare init`:
+
+```bash
+--analysis-template /path/to/svrom_python/examples/svrom02_cervicalB.yaml \
+--reference-frame-landmarks /path/to/svrom_python/data/reference_scene/SVROM02_cervicalB_reference_frames.json
+```
+
+The exporter converts template units and scales translations, gaps, penetration
+tolerances, and physical SDF lengths by the target/reference mean centrum-length
+ratio. Rotations, coverage fractions, and sampling counts stay unchanged. Each
+target retains its fitted pose and specimen-specific patches. See
+[analysis templates](docs/ANALYSIS_TEMPLATES.md) for the manifest syntax, scaling
+equation, original lattice, and validation limits. Inspect the poses, guides,
+patches, and template assumptions before interpreting ROM results.
 Original target files are never overwritten, deformed, or automatically repaired.
 An unsuccessful bounded search does not establish anatomical impossibility.
 
@@ -105,6 +120,7 @@ coordinates, settings, patch interpretation, and output schema. The
 | `surfaces` | Guide regions, surface support, collision checks, patch ensembles |
 | `seating` | Complementary surface loss, distributed support, adaptive clearance constraints |
 | `fitting` | Adjacent-joint optimization and chain assembly |
+| `analysis` | Size-normalized analysis settings, reference measurements, and provenance |
 | `workflow` | Manifests, provenance, resumable execution, SVROM exports |
 | `validation` | Original-face identity and exported-pose checks |
 | `settings` / `cli` | Explicit assumptions and command-line interface |
